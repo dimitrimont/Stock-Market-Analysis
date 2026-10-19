@@ -1,0 +1,5 @@
+yfinance>=1.0,<2   # Yahoo changed its API; the 0.2.x releases of December 2024 no longer download
+pandas>=2.2
+numpy>=1.26
+matplotlib>=3.8
+pytest>=8

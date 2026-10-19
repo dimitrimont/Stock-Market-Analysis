@@ -1,149 +1,68 @@
-#<Dimitri Montgomery>
+# <Dimitri Montgomery>
+"""Stock market analysis for a set of companies, from the command line.
+
+    python Stock_Market_Analysis_Tool.py                      # summary table, 10 companies, last 5 years
+    python Stock_Market_Analysis_Tool.py --chart NVDA AAPL    # price, averages and volume for each
+    python Stock_Market_Analysis_Tool.py --compare            # total change and growth, all companies
+    python Stock_Market_Analysis_Tool.py --start 2020-01-01 --end 2024-06-30 --save charts/
+
+Every figure and number covers the same stated period. The first version asked yes or no once per
+company; tickers, dates and charts are now options.
+"""
+
+import argparse
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+import stock_analysis as sa
 
 
-import numpy as np
-import yfinance as yf
-import pandas as pd
-import matplotlib.pyplot as plt
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--tickers", nargs="+", default=sa.TOP_10, help="default: the ten companies below")
+    today = date.today()
+    p.add_argument("--start", default=str(today - timedelta(days=round(5 * 365.25))), help="YYYY-MM-DD, default five years ago")
+    p.add_argument("--end", default=str(today), help="YYYY-MM-DD, default today")
+    p.add_argument("--chart", nargs="*", metavar="TICKER", help="price, moving averages and volume for these tickers")
+    p.add_argument("--compare", action="store_true", help="total change and cumulative growth for every ticker")
+    p.add_argument("--save", metavar="DIR", help="save charts as PNG files here instead of opening windows")
+    return p.parse_args(argv)
 
 
+def main(argv=None):
+    args = parse_args(argv)
+    tickers = [t.upper() for t in args.tickers]
+    chart = [t.upper() for t in (args.chart or [])]
+    try:
+        prices = sa.download(sorted(set(tickers + chart), key=(tickers + chart).index), args.start, args.end)
+    except sa.DownloadError as e:
+        sys.exit(f"error: {e}")
 
-def companyStockChange(top_10_companies):
-    for i in top_10_companies:
-        askCompany = str(input(f"Enter 'yes' if you would like to see the stock data from company: {i}"))
-        if askCompany == "Yes" or askCompany == "yes" or askCompany == "y" or askCompany == "Y":
-            stock_data = yf.download(i, start = "2020-01-01", end = "2024-06-30")
-            stock_data.fillna(value = True)
-    
-            stock_data['Daily Return'] = stock_data['Close'].pct_change()
-            stock_data['50-Day MA'] = stock_data['Close'].rolling(window = 50).mean()
-            stock_data['200-Day MA'] = stock_data['Close'].rolling(window = 200).mean()
-            stock_data['Volatility'] = stock_data['Close'].rolling(window = 20).std()
-    
-            #print(stock_data.columns)
-    
-            avg_daily_return = stock_data['Daily Return'].mean()
-            std_daily_return = stock_data['Daily Return'].std()
-            print(f"Average Daily Return: {avg_daily_return:.5f}")
-            print(f"Standard Deviation of Daily Returns: {std_daily_return:.5f}")
-    
-    
-            latest_50_day_ma = stock_data['50-Day MA'].iloc[-1]
-            latest_200_day_ma = stock_data['200-Day MA'].iloc[-1]
-            print(f"Latest 50-Day MA: {latest_50_day_ma:.2f}")
-            print(f"Latest 200-Day MA: {latest_200_day_ma:.2f}")
-    
-            avg_volatility = stock_data['Volatility'].mean()
-            print(f"Average Volatility: {avg_volatility:.5f}")
-    
+    print(f"{len(prices.close.columns)} companies, {sa.period_label(prices)} ({len(prices.close)} trading days)\n")
+    table = sa.summary(prices.close[tickers])
+    fmt = {c: "{:+.1%}".format for c in ["total return", "annualised return"]}
+    fmt.update({"annualised volatility": "{:.1%}".format, "average daily return": "{:+.3%}".format,
+                "std of daily returns": "{:.2%}".format})
+    fmt.update({c: "{:,.2f}".format for c in ["latest close", "latest 50-day MA", "latest 200-day MA"]})
+    print(table.to_string(formatters=fmt))
 
-            stock_data['Cumulative Return'] = (1 + stock_data['Daily Return']).cumprod()
-            print(stock_data[['Cumulative Return']].tail())
-    
+    figures = [(f"{t}_chart", sa.plot_company(prices, t)) for t in chart]
+    if args.compare:
+        figures += [("total_change", sa.plot_total_change(prices)), ("cumulative_returns", sa.plot_cumulative(prices))]
+    if not figures:
+        return
+    import matplotlib.pyplot as plt
 
-            plt.figure(figsize = (10, 6))
-            plt.title('Stock Change in Past 5 years')
-            plt.xlabel(f"{i}")
-            plt.ylabel('Stock Change')
-
-            plt.plot(stock_data)
-            plt.show();
-        else:
-            continue
-
-
-
-
-def percentChange(top_10_companies, adj_close):
-    total_change = ((adj_close.iloc[-1] - adj_close.iloc[0]) / adj_close.iloc[0]) * 100
-
-    #Plot bar
-    plt.figure(figsize = (10, 6))
-    bars = total_change.sort_values().plot(kind = 'bar', color = 'red')
-    plt.title('Total Percentage Change in Past 5 years')
-    plt.xlabel('Company')
-    plt.ylabel('Total Percentage Change')
-
-    #Annotate
-    for bar in bars.patches:
-        bars.annotate(f'{bar.get_height():.2f}%',
-                  ( bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                    ha='center', va='bottom')
-
-    plt.show()
-
-
-
-
-
-
-def cumlReturns(top_10_companies, cumulative_returns):
-    #Plot the cumulative returns
-    plt.figure(figsize=(14, 8))
-    for company in top_10_companies:
-        plt.plot(cumulative_returns[company], label = company)
-
-    #Annotate
-    for company in top_10_companies:
-        y = cumulative_returns[company].iloc[-1]
-        plt.annotate(f'{y*100:.2f}%',
-                    xy = (cumulative_returns.index[-1], y),
-                    xytext = (10, 0),
-                    textcoords = 'offset points',
-                    horizontalalignment = 'left', verticalalignment = 'center',
-                    fontsize = 9, bbox = dict(facecolor = 'gray', edgecolor = 'blue', alpha = 0.7))
-
-
-    plt.title('Cumulative Returns in the Past 5 years')
-    plt.xlabel('Date')
-    plt.ylabel('Cumulative Returns')
-    plt.legend()
-    plt.show()
-
-
-
+    if args.save:
+        out = Path(args.save)
+        out.mkdir(parents=True, exist_ok=True)
+        for name, fig in figures:
+            fig.savefig(out / f"{name}.png", dpi=120)
+            print(f"saved {out / (name + '.png')}")
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":
-    top_10_companies = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK-B', 'JNJ', 'JPM']
-
-    #past 5 years price data
-    data = yf.download(top_10_companies, period = '5y')
-
-    #adjusted close prices
-    adj_close = data['Close']
-
-    cumulative_returns = (adj_close / adj_close.iloc[0]) - 1
-
-
-    askStockChange = str(input(f"Enter 'yes' if you would like to see the stock data from the top 10 companies: "))
-    if askStockChange == "Yes" or askStockChange == "yes" or askStockChange == "y" or askStockChange == "Y":
-        companyStockChange(top_10_companies)
-    else:
-        print("Next Stat")
-        
-
-
-
-    askPercentChange = str(input(f"Enter 'yes' if you would like to see the percent change for the top 10 companies: "))
-    if askPercentChange == "Yes" or askPercentChange == "yes" or askPercentChange == "y" or askPercentChange == "Y":
-        percentChange(top_10_companies, adj_close)
-    else:
-        print("Next Stat")
-        
-
-
-
-    askCumlReturns = str(input(f"Enter 'yes' if you would like to see the cumulative returns from the top 10 companies: "))
-    if askCumlReturns == "Yes" or askCumlReturns == "yes" or askCumlReturns == "y" or askCumlReturns == "Y":
-        cumlReturns(top_10_companies, cumulative_returns)
-        print("All stats viewed")
-    else:
-        print("All stats viewed")
-
-
-#work on easier way of going through the charts
-
-
-
-
+    main()
